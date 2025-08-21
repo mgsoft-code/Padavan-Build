@@ -51,7 +51,7 @@ on:
           - NEWIFI3
           - QM-B1
           - R2100
-          - RM2100  # 目标设备：与2.txt一致
+          - RM2100
           - RT-AC85P
           - SIM-AX1800T
           - TX1801
@@ -64,7 +64,7 @@ on:
           - ZTE-E8820S
           - ZTE-E8820V2
           - ZTT-RX6000
-        default: RM2100  # 默认设备改为RM2100（与2.txt匹配）
+        default: RM2100
       toolchain:
         description: "Select compilation toolchain"
         required: true
@@ -72,32 +72,30 @@ on:
         options:
           - mipsel-linux-musl
           - mipsel-linux-uclibc
-        default: mipsel-linux-uclibc  # 工具链：与源码中toolchain-mipsel匹配
+        default: mipsel-linux-uclibc
       cpufreq:
         description: "Enable CPU Overclocking"
         type: boolean
-        default: true  # 启用超频（与2.txt中CONFIG_FIRMWARE_INCLUDE_OC=y一致）
+        default: true
       mt7621_oc:
         description: "1000Mhz=0x312 1100Mhz=0x362 1120Mhz=0x372 1200Mhz=0x3B2"
         type: choice
         options: [ '0x312', '0x362', '0x372', '0x3B2' ]
-        default: '0x312'  # 超频值：与2.txt中CONFIG_FIRMWARE_MT7621_OC="0x312"一致
+        default: '0x312'
       plugins:
         description: 'Plugin JSON, e.g. {"ss":"y","xray":"n"}'
         required: true
         type: string
-        # 插件开关：与2.txt中功能启用状态匹配
         default: '{"shadowsocks":"n","v2ray":"n","xray":"n","trojan":"n","ssobfs":"n","smartdns":"n","vlmcsd":"n","ttyd":"y","iperf3":"y","tcpdump":"y","mtr":"y","dropbear":"y","https":"y","aliddns":"y","qos":"y","ipset":"y","sfe":"y"}'
       customization:
         description: 'Customization JSON'
         required: true
         type: string
-        # 自定义参数：与1.txt中用户名、密码、无线配置一致
         default: '{"lanip":"192.168.2.1","signaccount":"root","signpassword":"root","wifi2gssid":"Redmi_888","wifi2gpsk":"","wifi5gssid":"Redmi_888","wifi5gpsk":"","wifi2g_guest_ssid":"Redmi_888_pub_2.4G","wifi5g_guest_ssid":"Redmi_888_pub_5G"}'
       nanoversion:
         description: "Build Nano Version"
         type: boolean
-        default: false  # 不启用精简版（保留2.txt中必要功能）
+        default: false
       release:
         description: "Upload to GitHub Release"
         type: boolean
@@ -115,7 +113,7 @@ env:
   TOOLCHAIN: ${{ inputs.toolchain }}
   TOOLCHAIN_URL: https://github.com/TurBoTse/padavan/releases/download/toolchain/${{ inputs.toolchain }}.tar.xz
   CONFIGFILE: trunk/configs/templates/${{ inputs.target }}.config
-  LINUX_DIR: linux-4.4.x  # 内核版本：与2.txt中CONFIG_LINUXDIR=linux-4.4.x一致
+  LINUX_DIR: linux-4.4.x
 jobs:
   build:
     name: Build ${{ inputs.target }}-${{ inputs.toolchain }}
@@ -147,7 +145,7 @@ jobs:
           sudo apt-get install -y \
             bison flex gperf help2man libtool-bin texinfo python3-docutils autopoint gettext ccache \
             autoconf automake liblzma-dev libltdl-dev liblzo2-dev jq
-          echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV  # 版本时间：与1.txt中version_time格式一致
+          echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
       - name: Validate Input JSON
         run: |
           jq empty <<< '${{ inputs.plugins }}' || { echo "❌ Invalid plugins JSON"; exit 1; }
@@ -171,39 +169,51 @@ jobs:
           export_json "$(cat plugins_fixed.json)" "PLUGIN_"
       - name: Apply Configurations
         run: |
-          # 应用1.txt中的用户配置（用户名、密码、LAN IP、无线名称等）
+          # 应用基础配置（用户名、密码、IP、WiFi）
           chmod +x trunk/custom/scripts/*.sh || true
           bash trunk/custom/scripts/setip.sh "$LANIP" trunk/user/shared/src/defaults.h trunk/user/www/dict/CN.dict
           bash trunk/custom/scripts/setaccount.sh "$SIGNACCOUNT" "$SIGNPASSWORD" trunk/user/shared/src/defaults.h
           bash trunk/custom/scripts/setwifi.sh "$WIFI2GSSID" "$WIFI2GPSK" "$WIFI5GSSID" "$WIFI5GPSK" trunk/user/shared/src/defaults.h
-          # 添加访客无线名称（1.txt中配置）
+          
+          # 配置访客WiFi名称（同步1.txt）
           sed -i 's/DEF_WLAN_2G_GSSID	".*"/DEF_WLAN_2G_GSSID	"'$WIFI2G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
           sed -i 's/DEF_WLAN_5G_GSSID	".*"/DEF_WLAN_5G_GSSID	"'$WIFI5G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
-          # 应用2.txt中的功能开关
+          
+          # 应用功能开关（同步2.txt）
           echo "CONFIG_VENDOR=Ralink" >> "$CONFIGFILE"
           echo "CONFIG_PRODUCT=MT7621" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_PRODUCT_ID=\"RM2100\"" >> "$CONFIGFILE"
-          echo "CONFIG_LINUXDIR=$LINUX_DIR" >> "$CONFIGFILE"  # 内核版本
-          echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> "$CONFIGFILE"  # 启用IPv6
-          echo "CONFIG_FIRMWARE_ENABLE_USB=n" >> "$CONFIGFILE"  # 禁用USB（2.txt中关闭）
-          echo "CONFIG_FIRMWARE_INCLUDE_SFE=$PLUGIN_SFE" >> "$CONFIGFILE"  # SFE快速转发
-          echo "CONFIG_FIRMWARE_INCLUDE_QOS=$PLUGIN_QOS" >> "$CONFIGFILE"  # QoS
-          echo "CONFIG_FIRMWARE_INCLUDE_IPSET=$PLUGIN_IPSET" >> "$CONFIGFILE"  # IPSet
-          # 禁用2.txt中未启用的功能
+          echo "CONFIG_LINUXDIR=$LINUX_DIR" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_ENABLE_USB=n" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_SFE=$PLUGIN_SFE" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_QOS=$PLUGIN_QOS" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_IPSET=$PLUGIN_IPSET" >> "$CONFIGFILE"
+          
+          # 禁用未启用功能
           echo "CONFIG_FIRMWARE_INCLUDE_TRANSMISSION=n" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_ARIA=n" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_MINIDLNA=n" >> "$CONFIGFILE"
+          
           # 应用插件配置
           for key in $(env | grep '^PLUGIN_' | cut -d= -f1); do
             echo "CONFIG_FIRMWARE_INCLUDE_${key#PLUGIN_}=${!key}" >> "$CONFIGFILE"
           done
-          # CPU超频配置（2.txt中启用）
+          
+          # CPU超频配置
           if [ "${{ inputs.cpufreq }}" = "true" ]; then
             echo "CONFIG_FIRMWARE_INCLUDE_OC=y" >> "$CONFIGFILE"
             echo "CONFIG_FIRMWARE_MT7621_OC=${{ inputs.mt7621_oc }}" >> "$CONFIGFILE"
           fi
-          # 更新版本号（与1.txt中version_time同步）
-          sed -i "s/FIRMWARE_BUILDS_REV=.*/FIRMWARE_BUILDS_REV=$BUILD_DATE/g" ./versions.inc
+          
+          # 修复版本号文件路径（关键修改：指向trunk目录下的versions.inc）
+          sed -i "s/FIRMWARE_BUILDS_REV=.*/FIRMWARE_BUILDS_REV=$BUILD_DATE/g" trunk/versions.inc
+          
+          # 调试：确认文件是否存在
+          if [ ! -f "trunk/versions.inc" ]; then
+            echo "::warning::versions.inc仍未找到，尝试搜索文件位置"
+            find . -name "versions.inc"  # 输出实际路径用于进一步调试
+          fi
       - name: Apply Nano Optimization
         if: ${{ inputs.nanoversion }}
         run: |
