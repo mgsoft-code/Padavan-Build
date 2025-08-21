@@ -1,7 +1,5 @@
 # Build TurBoTse's Padavan 4.4 Kernel
-
 name: Custom Build
-
 on:
   workflow_dispatch:
     inputs:
@@ -53,7 +51,7 @@ on:
           - NEWIFI3
           - QM-B1
           - R2100
-          - RM2100
+          - RM2100  # 目标设备：与2.txt一致
           - RT-AC85P
           - SIM-AX1800T
           - TX1801
@@ -66,7 +64,7 @@ on:
           - ZTE-E8820S
           - ZTE-E8820V2
           - ZTT-RX6000
-        default: K2P
+        default: RM2100  # 默认设备改为RM2100（与2.txt匹配）
       toolchain:
         description: "Select compilation toolchain"
         required: true
@@ -74,29 +72,32 @@ on:
         options:
           - mipsel-linux-musl
           - mipsel-linux-uclibc
-        default: mipsel-linux-musl
+        default: mipsel-linux-uclibc  # 工具链：与源码中toolchain-mipsel匹配
       cpufreq:
         description: "Enable CPU Overclocking"
         type: boolean
-        default: false
+        default: true  # 启用超频（与2.txt中CONFIG_FIRMWARE_INCLUDE_OC=y一致）
       mt7621_oc:
         description: "1000Mhz=0x312 1100Mhz=0x362 1120Mhz=0x372 1200Mhz=0x3B2"
         type: choice
         options: [ '0x312', '0x362', '0x372', '0x3B2' ]
+        default: '0x312'  # 超频值：与2.txt中CONFIG_FIRMWARE_MT7621_OC="0x312"一致
       plugins:
         description: 'Plugin JSON, e.g. {"ss":"y","xray":"n"}'
         required: true
         type: string
-        default: '{"shadowsocks":"y","v2ray":"n","xray":"y","trojan":"n","ssobfs":"y","smartdns":"y","vlmcsd":"y","ttyd":"n","iperf3":"n"}'
+        # 插件开关：与2.txt中功能启用状态匹配
+        default: '{"shadowsocks":"n","v2ray":"n","xray":"n","trojan":"n","ssobfs":"n","smartdns":"n","vlmcsd":"n","ttyd":"y","iperf3":"y","tcpdump":"y","mtr":"y","dropbear":"y","https":"y","aliddns":"y","qos":"y","ipset":"y","sfe":"y"}'
       customization:
         description: 'Customization JSON'
         required: true
         type: string
-        default: '{"lanip":"192.168.2.1","signaccount":"admin","signpassword":"admin","wifi2gssid":"Padavan","wifi2gpsk":"1234567890","wifi5gssid":"Padavan-5G","wifi5gpsk":"1234567890"}'
+        # 自定义参数：与1.txt中用户名、密码、无线配置一致
+        default: '{"lanip":"192.168.2.1","signaccount":"root","signpassword":"root","wifi2gssid":"Redmi_888","wifi2gpsk":"","wifi5gssid":"Redmi_888","wifi5gpsk":"","wifi2g_guest_ssid":"Redmi_888_pub_2.4G","wifi5g_guest_ssid":"Redmi_888_pub_5G"}'
       nanoversion:
         description: "Build Nano Version"
         type: boolean
-        default: false
+        default: false  # 不启用精简版（保留2.txt中必要功能）
       release:
         description: "Upload to GitHub Release"
         type: boolean
@@ -109,13 +110,12 @@ on:
         description: "Delete Old Workflows"
         type: boolean
         default: true
-
 env:
   FIRMWARE_AUTHOR: TurBoTse
   TOOLCHAIN: ${{ inputs.toolchain }}
   TOOLCHAIN_URL: https://github.com/TurBoTse/padavan/releases/download/toolchain/${{ inputs.toolchain }}.tar.xz
   CONFIGFILE: trunk/configs/templates/${{ inputs.target }}.config
-
+  LINUX_DIR: linux-4.4.x  # 内核版本：与2.txt中CONFIG_LINUXDIR=linux-4.4.x一致
 jobs:
   build:
     name: Build ${{ inputs.target }}-${{ inputs.toolchain }}
@@ -123,7 +123,6 @@ jobs:
     permissions:
       contents: write
       actions: write
-
     steps:
       - uses: actions/checkout@main
         with:
@@ -134,30 +133,25 @@ jobs:
           repository: TurBoTse/padavan
           ref: main
           fetch-depth: 1
-
       - uses: hendrikmuhs/ccache-action@main
         with:
           key: ${{ inputs.target }}-${{ inputs.toolchain }}
-
       - uses: actions/setup-go@main
         with:
           go-version: '1.24.x'
           check-latest: true
           cache: false
-
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             bison flex gperf help2man libtool-bin texinfo python3-docutils autopoint gettext ccache \
             autoconf automake liblzma-dev libltdl-dev liblzo2-dev jq
-          echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
-
+          echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV  # 版本时间：与1.txt中version_time格式一致
       - name: Validate Input JSON
         run: |
           jq empty <<< '${{ inputs.plugins }}' || { echo "❌ Invalid plugins JSON"; exit 1; }
           jq empty <<< '${{ inputs.customization }}' || { echo "❌ Invalid customization JSON"; exit 1; }
-
       - name: Export Customization & Plugin Flags
         run: |
           export_json() {
@@ -167,7 +161,6 @@ jobs:
               echo "${PREFIX}${k^^}=$v" >> $GITHUB_ENV
             done
           }
-
           export_json '${{ inputs.customization }}' ""
           if [ "${{ inputs.nanoversion }}" = "true" ]; then
             echo "⚠️ Nano version — all plugins disabled."
@@ -176,40 +169,57 @@ jobs:
             echo '${{ inputs.plugins }}' > plugins_fixed.json
           fi
           export_json "$(cat plugins_fixed.json)" "PLUGIN_"
-
       - name: Apply Configurations
         run: |
+          # 应用1.txt中的用户配置（用户名、密码、LAN IP、无线名称等）
           chmod +x trunk/custom/scripts/*.sh || true
           bash trunk/custom/scripts/setip.sh "$LANIP" trunk/user/shared/src/defaults.h trunk/user/www/dict/CN.dict
           bash trunk/custom/scripts/setaccount.sh "$SIGNACCOUNT" "$SIGNPASSWORD" trunk/user/shared/src/defaults.h
           bash trunk/custom/scripts/setwifi.sh "$WIFI2GSSID" "$WIFI2GPSK" "$WIFI5GSSID" "$WIFI5GPSK" trunk/user/shared/src/defaults.h
-
+          # 添加访客无线名称（1.txt中配置）
+          sed -i 's/DEF_WLAN_2G_GSSID	".*"/DEF_WLAN_2G_GSSID	"'$WIFI2G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
+          sed -i 's/DEF_WLAN_5G_GSSID	".*"/DEF_WLAN_5G_GSSID	"'$WIFI5G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
+          # 应用2.txt中的功能开关
+          echo "CONFIG_VENDOR=Ralink" >> "$CONFIGFILE"
+          echo "CONFIG_PRODUCT=MT7621" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_PRODUCT_ID=\"RM2100\"" >> "$CONFIGFILE"
+          echo "CONFIG_LINUXDIR=$LINUX_DIR" >> "$CONFIGFILE"  # 内核版本
+          echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> "$CONFIGFILE"  # 启用IPv6
+          echo "CONFIG_FIRMWARE_ENABLE_USB=n" >> "$CONFIGFILE"  # 禁用USB（2.txt中关闭）
+          echo "CONFIG_FIRMWARE_INCLUDE_SFE=$PLUGIN_SFE" >> "$CONFIGFILE"  # SFE快速转发
+          echo "CONFIG_FIRMWARE_INCLUDE_QOS=$PLUGIN_QOS" >> "$CONFIGFILE"  # QoS
+          echo "CONFIG_FIRMWARE_INCLUDE_IPSET=$PLUGIN_IPSET" >> "$CONFIGFILE"  # IPSet
+          # 禁用2.txt中未启用的功能
+          echo "CONFIG_FIRMWARE_INCLUDE_TRANSMISSION=n" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_ARIA=n" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_MINIDLNA=n" >> "$CONFIGFILE"
+          # 应用插件配置
           for key in $(env | grep '^PLUGIN_' | cut -d= -f1); do
             echo "CONFIG_FIRMWARE_INCLUDE_${key#PLUGIN_}=${!key}" >> "$CONFIGFILE"
           done
-
+          # CPU超频配置（2.txt中启用）
           if [ "${{ inputs.cpufreq }}" = "true" ]; then
             echo "CONFIG_FIRMWARE_INCLUDE_OC=y" >> "$CONFIGFILE"
             echo "CONFIG_FIRMWARE_MT7621_OC=${{ inputs.mt7621_oc }}" >> "$CONFIGFILE"
           fi
-
+          # 更新版本号（与1.txt中version_time同步）
+          sed -i "s/FIRMWARE_BUILDS_REV=.*/FIRMWARE_BUILDS_REV=$BUILD_DATE/g" ./versions.inc
       - name: Apply Nano Optimization
         if: ${{ inputs.nanoversion }}
         run: |
           for fs in ANTFS FAT EXFAT EXT2 EXT3 EXT4 XFS FUSE SWAP; do
             sed -i "s/CONFIG_FIRMWARE_ENABLE_${fs}=y/CONFIG_FIRMWARE_ENABLE_${fs}=n/" "$CONFIGFILE"
           done
-          modules=(UVC HID SERIAL AUDIO XFRM QOS IMQ IFB NFSD NFSC CIFS NTFS_3G LPRD U2EC TCPDUMP HDPARM PARTED 
-            SMBD WINS SMBD_SYSLOG FTPD RPL2TP EAP_PEAP HTTPS SFTP DROPBEAR DROPBEAR_FAST_CODE OPENSSH OPENVPN SSWAN 
-            OPENSSL_EC OPENSSL_EXE XUPNPD MINIDLNA FIREFLY FFMPEG_NEW TRANSMISSION TRANSMISSION_WEB_CONTROL ARIA 
-            ARIA_WEB_CONTROL CURL SCUTCLIENT GDUT_DRCOM DOGCOM MINIEAP NJIT_CLIENT SOFTETHERVPN_SERVER SOFTETHERVPN_CLIENT 
-            SOFTETHERVPN_CMD VLMCSD TTYD MSD_LITE LRZSZ HTOP NANO IPERF3 DUMP1090 RTL_SDR MTR SOCAT SRELAY MENTOHUST 
-            FRPC FRPS REDSOCKS SHADOWSOCKS XRAY V2RAY TROJAN SSOBFS SINGBOX NAIVEPROXY ADBYBY DNSFORWARDER SMARTDNS 
-            ADGUARDHOME ZEROTIER ALIDDNS DDNSTO ALDRIVER SQM WIREGUARD )
+          modules=(UVC HID SERIAL AUDIO XFRM IMQ NFSD NFSC CIFS NTFS_3G LPRD U2EC HDPARM PARTED 
+            SMBD WINS SMBD_SYSLOG FTPD RPL2TP EAP_PEAP SFTP OPENSSH OPENVPN SSWAN 
+            OPENSSL_EC XUPNPD FIREFLY FFMPEG_NEW TRANSMISSION TRANSMISSION_WEB_CONTROL ARIA 
+            ARIA_WEB_CONTROL SCUTCLIENT GDUT_DRCOM DOGCOM MINIEAP NJIT_CLIENT SOFTETHERVPN_SERVER SOFTETHERVPN_CLIENT 
+            SOFTETHERVPN_CMD VLMCSD LRZSZ DUMP1090 RTL_SDR SOCAT SRELAY MENTOHUST 
+            FRPC FRPS REDSOCKS SINGBOX NAIVEPROXY ADBYBY DNSFORWARDER ADGUARDHOME 
+            ZEROTIER DDNSTO ALDRIVER SQM )
           for m in "${modules[@]}"; do
             sed -i "s/CONFIG_FIRMWARE_INCLUDE_${m}=y/CONFIG_FIRMWARE_INCLUDE_${m}=n/" "$CONFIGFILE"
           done
-
       - name: Build Firmware
         run: |
           make ${{ inputs.target }} TOOLCHAIN=${{ inputs.toolchain }}
@@ -225,12 +235,10 @@ jobs:
             mv "$f" "trunk/output/${base}${suffix}.trx"
             i=$((i+1))
           done
-
       - uses: actions/upload-artifact@main
         with:
           name: ${{ inputs.target }}-${{ inputs.toolchain }}-${{ env.BUILD_DATE }}
           path: trunk/output/*.trx
-
       - uses: softprops/action-gh-release@master
         if: ${{ inputs.release }}
         with:
@@ -239,14 +247,14 @@ jobs:
           body: |
             Build Summary:
             - Date: ${{ env.BUILD_DATE }}
-            - Target: ${{ inputs.target }}
+            - Target: ${{ inputs.target }} (RM2100)
             - Toolchain: ${{ inputs.toolchain }}
+            - Kernel: ${{ env.LINUX_DIR }}
             - Nano: ${{ inputs.nanoversion }}
             - CPU OC: ${{ inputs.cpufreq }} (${{ inputs.mt7621_oc }})
             - Plugins: ${{ inputs.plugins }}
             - Custom: ${{ inputs.customization }}
           files: trunk/output/*.trx
-
       - uses: dev-drprasad/delete-older-releases@master
         if: ${{ inputs.oldreleases }}
         with:
@@ -255,7 +263,6 @@ jobs:
           delete_tags: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: Mattraks/delete-workflow-runs@main
         if: ${{ inputs.oldworkflow }}
         with:
