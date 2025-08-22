@@ -8,46 +8,30 @@ on:
         description: "Select router device"
         required: true
         type: choice
-        options:
-          - RM2100  # 仅保留目标设备以简化配置
+        options: [RM2100]
         default: RM2100
       toolchain:
         description: "Select compilation toolchain"
         required: true
         type: choice
-        options:
-          - mipsel-linux-uclibc
-          - mipsel-linux-musl
+        options: [mipsel-linux-uclibc, mipsel-linux-musl]
         default: mipsel-linux-uclibc
       cpufreq:
-        description: "Enable CPU Overclocking"
         type: boolean
         default: true
       mt7621_oc:
-        description: "1000Mhz=0x312 1100Mhz=0x362 1120Mhz=0x372 1200Mhz=0x3B2"
         type: choice
         options: [ '0x312', '0x362', '0x372', '0x3B2' ]
         default: '0x312'
-      plugins:
-        description: 'Plugin JSON'
-        required: true
-        type: string
-        default: '{"ttyd":"y","iperf3":"y","tcpdump":"y","mtr":"y","dropbear":"y","https":"y","aliddns":"y","qos":"y","ipset":"y","sfe":"y"}'
-      customization:
-        description: 'Customization JSON'
-        required: true
-        type: string
-        default: '{"lanip":"192.168.2.1","signaccount":"root","signpassword":"root","wifi2gssid":"Redmi_888","wifi2gpsk":"","wifi5gssid":"Redmi_888","wifi5gpsk":"","wifi2g_guest_ssid":"Redmi_888_pub_2.4G","wifi5g_guest_ssid":"Redmi_888_pub_5G"}'
       release:
-        description: "Upload to GitHub Release"
         type: boolean
         default: true
 
 env:
   FIRMWARE_AUTHOR: CustomBuild
   LINUX_DIR: linux-4.4.x
-  WORK_DIR: trunk
-  CONFIGFILE: trunk/configs/templates/RM2100.config
+  WORK_DIR: padavan  # 新增专用目录，避免冲突
+  CONFIGFILE: ${{ env.WORK_DIR }}/trunk/configs/templates/RM2100.config
 
 jobs:
   build:
@@ -57,35 +41,34 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout current repo (if needed)
         uses: actions/checkout@v4
         with:
           path: current
           fetch-depth: 1
 
-      - name: Clone Padavan source (full clone)
+      - name: Clone Padavan source (解决目录冲突)
         run: |
-          # 完整克隆源码，避免内核文件缺失
-          git clone --recursive https://github.com/TurBoTse/padavan.git .
-          # 验证内核目录完整性
-          if [ ! -d "$LINUX_DIR" ]; then
-            echo "::error::Kernel source directory $LINUX_DIR missing"
-            exit 1
+          # 关键修复：使用专用目录克隆，避免与现有文件冲突
+          if [ -d "${{ env.WORK_DIR }}" ]; then
+            echo "清理已有目录"
+            rm -rf ${{ env.WORK_DIR }}
           fi
-          # 检查内核配置文件
-          if [ ! -f "$CONFIGFILE" ]; then
-            echo "::error::Device config $CONFIGFILE missing"
+          # 完整克隆源码（含子模块）
+          git clone --recursive https://github.com/TurBoTse/padavan.git ${{ env.WORK_DIR }}
+          # 验证目录完整性
+          if [ ! -d "${{ env.WORK_DIR }}/${{ env.LINUX_DIR }}" ]; then
+            echo "::error::内核目录缺失"
             exit 1
           fi
 
-      - name: Install kernel build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             bison flex gperf help2man libtool-bin texinfo python3-docutils \
             autopoint gettext ccache autoconf automake liblzma-dev libltdl-dev \
-            liblzo2-dev jq libusb-1.0-0-dev \
-            bc libelf-dev binutils-dev zlib1g-dev  # 新增内核编译必需依赖
+            liblzo2-dev jq libusb-1.0-0-dev bc libelf-dev binutils-dev zlib1g-dev
 
       - name: Cache toolchain
         uses: hendrikmuhs/ccache-action@main
@@ -94,94 +77,88 @@ jobs:
 
       - name: Validate toolchain
         run: |
-          # 验证工具链是否正确安装
           if ! command -v ${{ inputs.toolchain }}-gcc &> /dev/null; then
-            echo "::error::Toolchain ${{ inputs.toolchain }} not found"
-            # 尝试重新下载工具链
-            wget $TOOLCHAIN_URL -O toolchain.tar.xz
+            echo "安装工具链"
+            wget https://github.com/TurBoTse/padavan/releases/download/toolchain/${{ inputs.toolchain }}.tar.xz -O toolchain.tar.xz
             mkdir -p toolchain
             tar -xf toolchain.tar.xz -C toolchain
             export PATH=$PWD/toolchain/bin:$PATH
-            ${{ inputs.toolchain }}-gcc --version || { echo "::error::Failed to install toolchain"; exit 1; }
           fi
+          ${{ inputs.toolchain }}-gcc --version || { echo "::error::工具链无效"; exit 1; }
 
       - name: Export configuration
         run: |
-          # 解析自定义配置
-          export_json() {
-            local JSON=$1
-            local PREFIX=$2
-            echo "$JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r k v; do
-              echo "${PREFIX}${k^^}=$v" >> $GITHUB_ENV
-            done
-          }
-          export_json '${{ inputs.customization }}' ""
-          export_json '${{ inputs.plugins }}' "PLUGIN_"
           echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
+          # 导入默认自定义配置
+          echo 'LANIP=192.168.2.1' >> $GITHUB_ENV
+          echo 'SIGNACCOUNT=root' >> $GITHUB_ENV
+          echo 'SIGNPASSWORD=root' >> $GITHUB_ENV
+          echo 'WIFI2GSSID=Redmi_888' >> $GITHUB_ENV
+          echo 'WIFI2GPSK=' >> $GITHUB_ENV
+          echo 'WIFI5GSSID=Redmi_888' >> $GITHUB_ENV
+          echo 'WIFI5GPSK=' >> $GITHUB_ENV
+          echo 'WIFI2G_GUEST_SSID=Redmi_888_pub_2.4G' >> $GITHUB_ENV
+          echo 'WIFI5G_GUEST_SSID=Redmi_888_pub_5G' >> $GITHUB_ENV
 
-      - name: Fix kernel configuration
+      - name: Apply configurations
         run: |
-          cd $WORK_DIR
-          # 加载设备默认配置
-          make defconfig
-          # 修复可能导致内核编译失败的配置
-          sed -i -e '/CONFIG_KALLSYMS/s/=y/=n/' \
-                 -e '/CONFIG_DEBUG_INFO/s/=y/=n/' \
-                 -e '/CONFIG_DEBUG_KERNEL/s/=y/=n/' \
-                 .config
-          # 确保内核版本与配置匹配
-          echo "CONFIG_LINUX_VERSION=\"4.4.x\"" >> .config
-          echo "CONFIG_LINUX_DIR=\"$LINUX_DIR\"" >> .config
+          cd ${{ env.WORK_DIR }}/trunk
+          # 修改系统配置
+          sed -i "s/SYS_USER_ROOT		\"admin\"/SYS_USER_ROOT		\"$SIGNACCOUNT\"/g" user/shared/src/defaults.h
+          sed -i "s/DEF_ROOT_PASSWORD	\"admin\"/DEF_ROOT_PASSWORD	\"$SIGNPASSWORD\"/g" user/shared/src/defaults.h
+          sed -i "s/192.168.2/$LANIP/g" user/shared/src/defaults.h
+          # 修改无线配置
+          sed -i "s/DEF_WLAN_2G_SSID	.*/DEF_WLAN_2G_SSID	\"$WIFI2GSSID\"/g" user/shared/src/defaults.h
+          sed -i "s/DEF_WLAN_5G_SSID	.*/DEF_WLAN_5G_SSID	\"$WIFI5GSSID\"/g" user/shared/src/defaults.h
+          sed -i "s/DEF_WLAN_2G_GSSID	.*/DEF_WLAN_2G_GSSID	\"$WIFI2G_GUEST_SSID\"/g" user/shared/src/defaults.h
+          sed -i "s/DEF_WLAN_5G_GSSID	.*/DEF_WLAN_5G_GSSID	\"$WIFI5G_GUEST_SSID\"/g" user/shared/src/defaults.h
+          sed -i "s/DEF_WLAN_2G_PSK		\".*\"/DEF_WLAN_2G_PSK		\"$WIFI2GPSK\"/g" user/shared/src/defaults.h
+          sed -i "s/DEF_WLAN_5G_PSK		\".*\"/DEF_WLAN_5G_PSK		\"$WIFI5GPSK\"/g" user/shared/src/defaults.h
+          # 内核配置修复
+          echo "CONFIG_FIRMWARE_INCLUDE_MSD_LITE=n" >> ${{ env.CONFIGFILE }}
+          echo "CONFIG_LINUXDIR=${{ env.LINUX_DIR }}" >> ${{ env.CONFIGFILE }}
+          # 超频配置
+          if [ "${{ inputs.cpufreq }}" = "true" ]; then
+            echo "CONFIG_FIRMWARE_INCLUDE_OC=y" >> ${{ env.CONFIGFILE }}
+            echo "CONFIG_FIRMWARE_MT7621_OC=${{ inputs.mt7621_oc }}" >> ${{ env.CONFIGFILE }}
+          fi
 
-      - name: Build kernel with verbose output
+      - name: Build kernel
         run: |
-          cd $WORK_DIR
-          # 单独编译内核并保存详细日志
-          make linux V=1 2>&1 | tee kernel_build.log
-          # 检查内核编译结果
-          if [ ! -f "$LINUX_DIR/vmlinux" ]; then
-            echo "::error::Kernel image not generated"
+          cd ${{ env.WORK_DIR }}/trunk
+          make linux V=1 2>&1 | tee kernel.log
+          if [ ! -f "${{ env.LINUX_DIR }}/vmlinux" ]; then
+            echo "::error::内核编译失败"
             exit 1
           fi
 
-      - name: Build remaining components
+      - name: Build firmware
         run: |
-          cd $WORK_DIR
-          # 编译用户态组件和固件打包
-          make V=1 2>&1 | tee full_build.log
-
-      - name: Package firmware
-        run: |
-          cd $WORK_DIR
+          cd ${{ env.WORK_DIR }}/trunk
+          make ${{ inputs.target }} TOOLCHAIN=${{ inputs.toolchain }} V=1 2>&1 | tee build.log
           mkdir -p output
-          base="RM2100-4.4-${{ inputs.toolchain }}-${{ env.BUILD_DATE }}"
+          base="RM2100-${{ env.BUILD_DATE }}-${{ inputs.toolchain }}"
           [ "${{ inputs.cpufreq }}" = "true" ] && base="${base}-oc-${{ inputs.mt7621_oc }}"
           mv images/*.trx output/${base}.trx
-          ls -la output/
 
-      - name: Upload kernel logs on failure
+      - name: Upload logs on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-logs
-          path: ${{ env.WORK_DIR }}/kernel_build.log
-
-      - name: Upload full logs on failure
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-build-logs
-          path: ${{ env.WORK_DIR }}/full_build.log
+          name: build-logs
+          path: |
+            ${{ env.WORK_DIR }}/trunk/kernel.log
+            ${{ env.WORK_DIR }}/trunk/build.log
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: rm2100-firmware-${{ env.BUILD_DATE }}
-          path: ${{ env.WORK_DIR }}/output/*.trx
+          name: rm2100-firmware
+          path: ${{ env.WORK_DIR }}/trunk/output/*.trx
 
       - name: Create release
         if: ${{ inputs.release && success() }}
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.BUILD_DATE }}
-          files: ${{ env.WORK_DIR }}/output/*.trx
+          files: ${{ env.WORK_DIR }}/trunk/output/*.trx
