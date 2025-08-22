@@ -30,7 +30,8 @@ on:
 env:
   FIRMWARE_AUTHOR: CustomBuild
   LINUX_DIR: linux-4.4.x
-  WORK_DIR: padavan  # 新增专用目录，避免冲突
+  WORK_DIR: padavan  # 专用目录，避免冲突
+  # 修复配置文件路径的环境变量引用方式
   CONFIGFILE: ${{ env.WORK_DIR }}/trunk/configs/templates/RM2100.config
 
 jobs:
@@ -49,14 +50,13 @@ jobs:
 
       - name: Clone Padavan source (解决目录冲突)
         run: |
-          # 关键修复：使用专用目录克隆，避免与现有文件冲突
+          # 清理并克隆源码到专用目录
           if [ -d "${{ env.WORK_DIR }}" ]; then
             echo "清理已有目录"
             rm -rf ${{ env.WORK_DIR }}
           fi
-          # 完整克隆源码（含子模块）
           git clone --recursive https://github.com/TurBoTse/padavan.git ${{ env.WORK_DIR }}
-          # 验证目录完整性
+          # 验证内核目录完整性
           if [ ! -d "${{ env.WORK_DIR }}/${{ env.LINUX_DIR }}" ]; then
             echo "::error::内核目录缺失"
             exit 1
@@ -162,3 +162,4 @@ jobs:
         with:
           tag_name: ${{ env.BUILD_DATE }}
           files: ${{ env.WORK_DIR }}/trunk/output/*.trx
+    
