@@ -1,5 +1,6 @@
-# Build TurBoTse's Padavan 4.4 Kernel
-name: Custom Build
+# Build Custom Padavan 4.4 Firmware
+name: Custom Padavan Build
+
 on:
   workflow_dispatch:
     inputs:
@@ -108,12 +109,14 @@ on:
         description: "Delete Old Workflows"
         type: boolean
         default: true
+
 env:
-  FIRMWARE_AUTHOR: TurBoTse
+  FIRMWARE_AUTHOR: CustomBuild
   TOOLCHAIN: ${{ inputs.toolchain }}
   TOOLCHAIN_URL: https://github.com/TurBoTse/padavan/releases/download/toolchain/${{ inputs.toolchain }}.tar.xz
   CONFIGFILE: trunk/configs/templates/${{ inputs.target }}.config
   LINUX_DIR: linux-4.4.x
+
 jobs:
   build:
     name: Build ${{ inputs.target }}-${{ inputs.toolchain }}
@@ -121,36 +124,48 @@ jobs:
     permissions:
       contents: write
       actions: write
+
     steps:
-      - uses: actions/checkout@main
+      - name: Checkout current repository
+        uses: actions/checkout@main
         with:
           path: current
           fetch-depth: 1
-      - uses: actions/checkout@main
+
+      - name: Checkout Padavan source
+        uses: actions/checkout@main
         with:
           repository: TurBoTse/padavan
           ref: main
           fetch-depth: 1
-      - uses: hendrikmuhs/ccache-action@main
+
+      - name: Cache toolchain and build files
+        uses: hendrikmuhs/ccache-action@main
         with:
           key: ${{ inputs.target }}-${{ inputs.toolchain }}
-      - uses: actions/setup-go@main
+
+      - name: Set up Go environment
+        uses: actions/setup-go@main
         with:
           go-version: '1.24.x'
           check-latest: true
           cache: false
-      - name: Install Build Dependencies
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bison flex gperf help2man libtool-bin texinfo python3-docutils autopoint gettext ccache \
-            autoconf automake liblzma-dev libltdl-dev liblzo2-dev jq
+            bison flex gperf help2man libtool-bin texinfo python3-docutils \
+            autopoint gettext ccache autoconf automake liblzma-dev libltdl-dev \
+            liblzo2-dev jq libusb-1.0-0-dev  # 增加libusb依赖以防其他组件需要
           echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
-      - name: Validate Input JSON
+
+      - name: Validate input JSON formats
         run: |
           jq empty <<< '${{ inputs.plugins }}' || { echo "❌ Invalid plugins JSON"; exit 1; }
           jq empty <<< '${{ inputs.customization }}' || { echo "❌ Invalid customization JSON"; exit 1; }
-      - name: Export Customization & Plugin Flags
+
+      - name: Export customization and plugin flags
         run: |
           export_json() {
             local JSON=$1
@@ -160,40 +175,50 @@ jobs:
             done
           }
           export_json '${{ inputs.customization }}' ""
+          
+          # 处理插件配置（如果是精简版则禁用所有插件）
           if [ "${{ inputs.nanoversion }}" = "true" ]; then
-            echo "⚠️ Nano version — all plugins disabled."
+            echo "⚠️ Nano version - all plugins disabled"
             echo '${{ inputs.plugins }}' | jq 'with_entries(.value="n")' > plugins_fixed.json
           else
             echo '${{ inputs.plugins }}' > plugins_fixed.json
           fi
           export_json "$(cat plugins_fixed.json)" "PLUGIN_"
-      - name: Apply Configurations
+
+      - name: Apply configurations from 1.txt and 2.txt
         run: |
-          # 应用基础配置（用户名、密码、IP、WiFi）
+          # 应用基础系统配置
           chmod +x trunk/custom/scripts/*.sh || true
           bash trunk/custom/scripts/setip.sh "$LANIP" trunk/user/shared/src/defaults.h trunk/user/www/dict/CN.dict
           bash trunk/custom/scripts/setaccount.sh "$SIGNACCOUNT" "$SIGNPASSWORD" trunk/user/shared/src/defaults.h
           bash trunk/custom/scripts/setwifi.sh "$WIFI2GSSID" "$WIFI2GPSK" "$WIFI5GSSID" "$WIFI5GPSK" trunk/user/shared/src/defaults.h
           
-          # 配置访客WiFi名称（同步1.txt）
+          # 配置访客WiFi名称
           sed -i 's/DEF_WLAN_2G_GSSID	".*"/DEF_WLAN_2G_GSSID	"'$WIFI2G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
           sed -i 's/DEF_WLAN_5G_GSSID	".*"/DEF_WLAN_5G_GSSID	"'$WIFI5G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
           
-          # 应用功能开关（同步2.txt）
+          # 设备基础配置
           echo "CONFIG_VENDOR=Ralink" >> "$CONFIGFILE"
           echo "CONFIG_PRODUCT=MT7621" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_PRODUCT_ID=\"RM2100\"" >> "$CONFIGFILE"
           echo "CONFIG_LINUXDIR=$LINUX_DIR" >> "$CONFIGFILE"
+          
+          # 功能开关配置
           echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_ENABLE_USB=n" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_SFE=$PLUGIN_SFE" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_QOS=$PLUGIN_QOS" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_IPSET=$PLUGIN_IPSET" >> "$CONFIGFILE"
           
-          # 禁用未启用功能
+          # 关键修复：禁用msd_lite组件（解决编译错误）
+          echo "CONFIG_FIRMWARE_INCLUDE_MSD_LITE=n" >> "$CONFIGFILE"
+          
+          # 禁用其他非必要组件
           echo "CONFIG_FIRMWARE_INCLUDE_TRANSMISSION=n" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_ARIA=n" >> "$CONFIGFILE"
           echo "CONFIG_FIRMWARE_INCLUDE_MINIDLNA=n" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_USB_STORAGE=n" >> "$CONFIGFILE"
+          echo "CONFIG_FIRMWARE_INCLUDE_PRINTER=n" >> "$CONFIGFILE"
           
           # 应用插件配置
           for key in $(env | grep '^PLUGIN_' | cut -d= -f1); do
@@ -206,38 +231,48 @@ jobs:
             echo "CONFIG_FIRMWARE_MT7621_OC=${{ inputs.mt7621_oc }}" >> "$CONFIGFILE"
           fi
           
-          # 修复版本号文件路径（关键修改：指向trunk目录下的versions.inc）
-          sed -i "s/FIRMWARE_BUILDS_REV=.*/FIRMWARE_BUILDS_REV=$BUILD_DATE/g" trunk/versions.inc
-          
-          # 调试：确认文件是否存在
-          if [ ! -f "trunk/versions.inc" ]; then
-            echo "::warning::versions.inc仍未找到，尝试搜索文件位置"
-            find . -name "versions.inc"  # 输出实际路径用于进一步调试
+          # 更新版本号
+          if [ -f "trunk/versions.inc" ]; then
+            sed -i "s/FIRMWARE_BUILDS_REV=.*/FIRMWARE_BUILDS_REV=$BUILD_DATE/g" trunk/versions.inc
+          else
+            echo "::warning::versions.inc not found, skipping version update"
+            find . -name "versions.inc"  # 显示实际位置用于调试
           fi
-      - name: Apply Nano Optimization
+
+      - name: Apply nano version optimizations
         if: ${{ inputs.nanoversion }}
         run: |
+          # 禁用文件系统支持
           for fs in ANTFS FAT EXFAT EXT2 EXT3 EXT4 XFS FUSE SWAP; do
             sed -i "s/CONFIG_FIRMWARE_ENABLE_${fs}=y/CONFIG_FIRMWARE_ENABLE_${fs}=n/" "$CONFIGFILE"
           done
-          modules=(UVC HID SERIAL AUDIO XFRM IMQ NFSD NFSC CIFS NTFS_3G LPRD U2EC HDPARM PARTED 
-            SMBD WINS SMBD_SYSLOG FTPD RPL2TP EAP_PEAP SFTP OPENSSH OPENVPN SSWAN 
-            OPENSSL_EC XUPNPD FIREFLY FFMPEG_NEW TRANSMISSION TRANSMISSION_WEB_CONTROL ARIA 
-            ARIA_WEB_CONTROL SCUTCLIENT GDUT_DRCOM DOGCOM MINIEAP NJIT_CLIENT SOFTETHERVPN_SERVER SOFTETHERVPN_CLIENT 
-            SOFTETHERVPN_CMD VLMCSD LRZSZ DUMP1090 RTL_SDR SOCAT SRELAY MENTOHUST 
-            FRPC FRPS REDSOCKS SINGBOX NAIVEPROXY ADBYBY DNSFORWARDER ADGUARDHOME 
-            ZEROTIER DDNSTO ALDRIVER SQM )
+          
+          # 禁用更多非必要组件
+          modules=(UVC HID SERIAL AUDIO XFRM IMQ NFSD NFSC CIFS NTFS_3G LPRD 
+            U2EC HDPARM PARTED SMBD WINS SMBD_SYSLOG FTPD RPL2TP EAP_PEAP SFTP 
+            OPENSSH OPENVPN SSWAN OPENSSL_EC XUPNPD FIREFLY FFMPEG_NEW 
+            TRANSMISSION TRANSMISSION_WEB_CONTROL ARIA ARIA_WEB_CONTROL 
+            SCUTCLIENT GDUT_DRCOM DOGCOM MINIEAP NJIT_CLIENT SOFTETHERVPN_SERVER 
+            SOFTETHERVPN_CLIENT SOFTETHERVPN_CMD VLMCSD LRZSZ DUMP1090 RTL_SDR 
+            SOCAT SRELAY MENTOHUST FRPC FRPS REDSOCKS SINGBOX NAIVEPROXY ADBYBY 
+            DNSFORWARDER ADGUARDHOME ZEROTIER DDNSTO ALDRIVER SQM)
           for m in "${modules[@]}"; do
             sed -i "s/CONFIG_FIRMWARE_INCLUDE_${m}=y/CONFIG_FIRMWARE_INCLUDE_${m}=n/" "$CONFIGFILE"
           done
-      - name: Build Firmware
+
+      - name: Build firmware
         run: |
-          make ${{ inputs.target }} TOOLCHAIN=${{ inputs.toolchain }}
+          # 开始编译并输出详细日志
+          make ${{ inputs.target }} TOOLCHAIN=${{ inputs.toolchain }} V=1  # V=1显示详细编译过程
+          
+          # 准备输出目录和文件名
           mkdir -p trunk/output
           base="${FIRMWARE_AUTHOR}-${{ inputs.target }}-4.4-${{ inputs.toolchain }}"
           [ "${{ inputs.nanoversion }}" = "true" ] && base="${base}-nano"
           [ "${{ inputs.cpufreq }}" = "true" ] && base="${base}-cpufreq-${{ inputs.mt7621_oc }}"
           base="${base}-${BUILD_DATE}"
+          
+          # 移动生成的固件文件
           i=1
           for f in trunk/images/*.trx; do
             suffix=""
@@ -245,36 +280,43 @@ jobs:
             mv "$f" "trunk/output/${base}${suffix}.trx"
             i=$((i+1))
           done
-      - uses: actions/upload-artifact@main
+
+      - name: Upload firmware as artifact
+        uses: actions/upload-artifact@main
         with:
-          name: ${{ inputs.target }}-${{ inputs.toolchain }}-${{ env.BUILD_DATE }}
+          name: ${{ inputs.target }}-firmware-${{ env.BUILD_DATE }}
           path: trunk/output/*.trx
-      - uses: softprops/action-gh-release@master
+          if-no-files-found: error
+
+      - name: Create GitHub release
         if: ${{ inputs.release }}
+        uses: softprops/action-gh-release@master
         with:
           tag_name: ${{ env.BUILD_DATE }}
-          name: ${{ env.BUILD_DATE }}
+          name: Firmware Build ${{ env.BUILD_DATE }}
           body: |
-            Build Summary:
-            - Date: ${{ env.BUILD_DATE }}
-            - Target: ${{ inputs.target }} (RM2100)
+            ### Build Details
+            - Device: ${{ inputs.target }}
             - Toolchain: ${{ inputs.toolchain }}
             - Kernel: ${{ env.LINUX_DIR }}
-            - Nano: ${{ inputs.nanoversion }}
-            - CPU OC: ${{ inputs.cpufreq }} (${{ inputs.mt7621_oc }})
-            - Plugins: ${{ inputs.plugins }}
-            - Custom: ${{ inputs.customization }}
+            - CPU Overclock: ${{ inputs.cpufreq }} (${{ inputs.mt7621_oc }})
+            - Nano Version: ${{ inputs.nanoversion }}
+            - Build Date: ${{ env.BUILD_DATE }}
           files: trunk/output/*.trx
-      - uses: dev-drprasad/delete-older-releases@master
+
+      - name: Clean up old releases
         if: ${{ inputs.oldreleases }}
+        uses: dev-drprasad/delete-older-releases@master
         with:
           keep_latest: 1
-          keep_min_download_counts: 1
+          keep_minimum_runs: 1
           delete_tags: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Mattraks/delete-workflow-runs@main
+
+      - name: Clean up old workflows
         if: ${{ inputs.oldworkflow }}
+        uses: Mattraks/delete-workflow-runs@main
         with:
           retain_days: 0
           keep_minimum_runs: 1
