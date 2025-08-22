@@ -9,70 +9,15 @@ on:
         required: true
         type: choice
         options:
-          - 360-T6M
-          - 360-T6M-PB
-          - B70
-          - BELL-A040WQ
-          - C-Life-XG1
-          - CR660x
-          - DIR-878
-          - DIR-882
-          - EA7500
-          - G-AX1800
-          - G-AX1800-B
-          - GHL
-          - HAR-20S2U1
-          - JCG-836PRO
-          - JCG-AC860M
-          - JCG-Q10Pro
-          - JCG-Q10Pro-PB
-          - JCG-Q11Pro
-          - JCG-Q20
-          - JCG-Q20-PB
-          - JCG-Y2
-          - JDCLOUD-RE-CP-02
-          - JDCLOUD-RE-SP-01B
-          - K2P
-          - K2P-NANO
-          - K2P-USB
-          - KOMI-A8
-          - MI-4
-          - MI-R3G
-          - MI-R3P-PB
-          - MI-R3P-SPI
-          - MI-R3P
-          - MI-R4A
-          - MR2600
-          - MSG1500
-          - MSG1500-Z
-          - NETGEAR-BZV
-          - NETGEAR-R6800
-          - NETGEAR-R7450
-          - NEWIFI
-          - NEWIFI3
-          - QM-B1
-          - R2100
-          - RM2100
-          - RT-AC85P
-          - SIM-AX1800T
-          - TX1801
-          - WDR8620
-          - WRL18M4GD
-          - WE410443-TC
-          - WIA3300-10
-          - WR1200JS
-          - XY-C1
-          - ZTE-E8820S
-          - ZTE-E8820V2
-          - ZTT-RX6000
+          - RM2100  # 仅保留目标设备以简化配置
         default: RM2100
       toolchain:
         description: "Select compilation toolchain"
         required: true
         type: choice
         options:
-          - mipsel-linux-musl
           - mipsel-linux-uclibc
+          - mipsel-linux-musl
         default: mipsel-linux-uclibc
       cpufreq:
         description: "Enable CPU Overclocking"
@@ -84,89 +29,85 @@ on:
         options: [ '0x312', '0x362', '0x372', '0x3B2' ]
         default: '0x312'
       plugins:
-        description: 'Plugin JSON, e.g. {"ss":"y","xray":"n"}'
+        description: 'Plugin JSON'
         required: true
         type: string
-        default: '{"shadowsocks":"n","v2ray":"n","xray":"n","trojan":"n","ssobfs":"n","smartdns":"n","vlmcsd":"n","ttyd":"y","iperf3":"y","tcpdump":"y","mtr":"y","dropbear":"y","https":"y","aliddns":"y","qos":"y","ipset":"y","sfe":"y"}'
+        default: '{"ttyd":"y","iperf3":"y","tcpdump":"y","mtr":"y","dropbear":"y","https":"y","aliddns":"y","qos":"y","ipset":"y","sfe":"y"}'
       customization:
         description: 'Customization JSON'
         required: true
         type: string
         default: '{"lanip":"192.168.2.1","signaccount":"root","signpassword":"root","wifi2gssid":"Redmi_888","wifi2gpsk":"","wifi5gssid":"Redmi_888","wifi5gpsk":"","wifi2g_guest_ssid":"Redmi_888_pub_2.4G","wifi5g_guest_ssid":"Redmi_888_pub_5G"}'
-      nanoversion:
-        description: "Build Nano Version"
-        type: boolean
-        default: false
       release:
         description: "Upload to GitHub Release"
-        type: boolean
-        default: true
-      oldreleases:
-        description: "Delete Old Releases"
-        type: boolean
-        default: true
-      oldworkflow:
-        description: "Delete Old Workflows"
         type: boolean
         default: true
 
 env:
   FIRMWARE_AUTHOR: CustomBuild
-  TOOLCHAIN: ${{ inputs.toolchain }}
-  TOOLCHAIN_URL: https://github.com/TurBoTse/padavan/releases/download/toolchain/${{ inputs.toolchain }}.tar.xz
-  CONFIGFILE: trunk/configs/templates/${{ inputs.target }}.config
   LINUX_DIR: linux-4.4.x
+  WORK_DIR: trunk
+  CONFIGFILE: trunk/configs/templates/RM2100.config
 
 jobs:
   build:
-    name: Build ${{ inputs.target }}-${{ inputs.toolchain }}
+    name: Build RM2100 Firmware
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
 
     steps:
-      - name: Checkout current repository
-        uses: actions/checkout@main
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           path: current
           fetch-depth: 1
 
-      - name: Checkout Padavan source
-        uses: actions/checkout@main
-        with:
-          repository: TurBoTse/padavan
-          ref: main
-          fetch-depth: 1
+      - name: Clone Padavan source (full clone)
+        run: |
+          # 完整克隆源码，避免内核文件缺失
+          git clone --recursive https://github.com/TurBoTse/padavan.git .
+          # 验证内核目录完整性
+          if [ ! -d "$LINUX_DIR" ]; then
+            echo "::error::Kernel source directory $LINUX_DIR missing"
+            exit 1
+          fi
+          # 检查内核配置文件
+          if [ ! -f "$CONFIGFILE" ]; then
+            echo "::error::Device config $CONFIGFILE missing"
+            exit 1
+          fi
 
-      - name: Cache toolchain and build files
-        uses: hendrikmuhs/ccache-action@main
-        with:
-          key: ${{ inputs.target }}-${{ inputs.toolchain }}
-
-      - name: Set up Go environment
-        uses: actions/setup-go@main
-        with:
-          go-version: '1.24.x'
-          check-latest: true
-          cache: false
-
-      - name: Install build dependencies
+      - name: Install kernel build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             bison flex gperf help2man libtool-bin texinfo python3-docutils \
             autopoint gettext ccache autoconf automake liblzma-dev libltdl-dev \
-            liblzo2-dev jq libusb-1.0-0-dev  # 增加libusb依赖以防其他组件需要
-          echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
+            liblzo2-dev jq libusb-1.0-0-dev \
+            bc libelf-dev binutils-dev zlib1g-dev  # 新增内核编译必需依赖
 
-      - name: Validate input JSON formats
-        run: |
-          jq empty <<< '${{ inputs.plugins }}' || { echo "❌ Invalid plugins JSON"; exit 1; }
-          jq empty <<< '${{ inputs.customization }}' || { echo "❌ Invalid customization JSON"; exit 1; }
+      - name: Cache toolchain
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ inputs.toolchain }}-kernel
 
-      - name: Export customization and plugin flags
+      - name: Validate toolchain
         run: |
+          # 验证工具链是否正确安装
+          if ! command -v ${{ inputs.toolchain }}-gcc &> /dev/null; then
+            echo "::error::Toolchain ${{ inputs.toolchain }} not found"
+            # 尝试重新下载工具链
+            wget $TOOLCHAIN_URL -O toolchain.tar.xz
+            mkdir -p toolchain
+            tar -xf toolchain.tar.xz -C toolchain
+            export PATH=$PWD/toolchain/bin:$PATH
+            ${{ inputs.toolchain }}-gcc --version || { echo "::error::Failed to install toolchain"; exit 1; }
+          fi
+
+      - name: Export configuration
+        run: |
+          # 解析自定义配置
           export_json() {
             local JSON=$1
             local PREFIX=$2
@@ -175,148 +116,72 @@ jobs:
             done
           }
           export_json '${{ inputs.customization }}' ""
-          
-          # 处理插件配置（如果是精简版则禁用所有插件）
-          if [ "${{ inputs.nanoversion }}" = "true" ]; then
-            echo "⚠️ Nano version - all plugins disabled"
-            echo '${{ inputs.plugins }}' | jq 'with_entries(.value="n")' > plugins_fixed.json
-          else
-            echo '${{ inputs.plugins }}' > plugins_fixed.json
-          fi
-          export_json "$(cat plugins_fixed.json)" "PLUGIN_"
+          export_json '${{ inputs.plugins }}' "PLUGIN_"
+          echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
 
-      - name: Apply configurations from 1.txt and 2.txt
+      - name: Fix kernel configuration
         run: |
-          # 应用基础系统配置
-          chmod +x trunk/custom/scripts/*.sh || true
-          bash trunk/custom/scripts/setip.sh "$LANIP" trunk/user/shared/src/defaults.h trunk/user/www/dict/CN.dict
-          bash trunk/custom/scripts/setaccount.sh "$SIGNACCOUNT" "$SIGNPASSWORD" trunk/user/shared/src/defaults.h
-          bash trunk/custom/scripts/setwifi.sh "$WIFI2GSSID" "$WIFI2GPSK" "$WIFI5GSSID" "$WIFI5GPSK" trunk/user/shared/src/defaults.h
-          
-          # 配置访客WiFi名称
-          sed -i 's/DEF_WLAN_2G_GSSID	".*"/DEF_WLAN_2G_GSSID	"'$WIFI2G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
-          sed -i 's/DEF_WLAN_5G_GSSID	".*"/DEF_WLAN_5G_GSSID	"'$WIFI5G_GUEST_SSID'"/g' trunk/user/shared/src/defaults.h
-          
-          # 设备基础配置
-          echo "CONFIG_VENDOR=Ralink" >> "$CONFIGFILE"
-          echo "CONFIG_PRODUCT=MT7621" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_PRODUCT_ID=\"RM2100\"" >> "$CONFIGFILE"
-          echo "CONFIG_LINUXDIR=$LINUX_DIR" >> "$CONFIGFILE"
-          
-          # 功能开关配置
-          echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_ENABLE_USB=n" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_SFE=$PLUGIN_SFE" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_QOS=$PLUGIN_QOS" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_IPSET=$PLUGIN_IPSET" >> "$CONFIGFILE"
-          
-          # 关键修复：禁用msd_lite组件（解决编译错误）
-          echo "CONFIG_FIRMWARE_INCLUDE_MSD_LITE=n" >> "$CONFIGFILE"
-          
-          # 禁用其他非必要组件
-          echo "CONFIG_FIRMWARE_INCLUDE_TRANSMISSION=n" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_ARIA=n" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_MINIDLNA=n" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_USB_STORAGE=n" >> "$CONFIGFILE"
-          echo "CONFIG_FIRMWARE_INCLUDE_PRINTER=n" >> "$CONFIGFILE"
-          
-          # 应用插件配置
-          for key in $(env | grep '^PLUGIN_' | cut -d= -f1); do
-            echo "CONFIG_FIRMWARE_INCLUDE_${key#PLUGIN_}=${!key}" >> "$CONFIGFILE"
-          done
-          
-          # CPU超频配置
-          if [ "${{ inputs.cpufreq }}" = "true" ]; then
-            echo "CONFIG_FIRMWARE_INCLUDE_OC=y" >> "$CONFIGFILE"
-            echo "CONFIG_FIRMWARE_MT7621_OC=${{ inputs.mt7621_oc }}" >> "$CONFIGFILE"
-          fi
-          
-          # 更新版本号
-          if [ -f "trunk/versions.inc" ]; then
-            sed -i "s/FIRMWARE_BUILDS_REV=.*/FIRMWARE_BUILDS_REV=$BUILD_DATE/g" trunk/versions.inc
-          else
-            echo "::warning::versions.inc not found, skipping version update"
-            find . -name "versions.inc"  # 显示实际位置用于调试
+          cd $WORK_DIR
+          # 加载设备默认配置
+          make defconfig
+          # 修复可能导致内核编译失败的配置
+          sed -i -e '/CONFIG_KALLSYMS/s/=y/=n/' \
+                 -e '/CONFIG_DEBUG_INFO/s/=y/=n/' \
+                 -e '/CONFIG_DEBUG_KERNEL/s/=y/=n/' \
+                 .config
+          # 确保内核版本与配置匹配
+          echo "CONFIG_LINUX_VERSION=\"4.4.x\"" >> .config
+          echo "CONFIG_LINUX_DIR=\"$LINUX_DIR\"" >> .config
+
+      - name: Build kernel with verbose output
+        run: |
+          cd $WORK_DIR
+          # 单独编译内核并保存详细日志
+          make linux V=1 2>&1 | tee kernel_build.log
+          # 检查内核编译结果
+          if [ ! -f "$LINUX_DIR/vmlinux" ]; then
+            echo "::error::Kernel image not generated"
+            exit 1
           fi
 
-      - name: Apply nano version optimizations
-        if: ${{ inputs.nanoversion }}
+      - name: Build remaining components
         run: |
-          # 禁用文件系统支持
-          for fs in ANTFS FAT EXFAT EXT2 EXT3 EXT4 XFS FUSE SWAP; do
-            sed -i "s/CONFIG_FIRMWARE_ENABLE_${fs}=y/CONFIG_FIRMWARE_ENABLE_${fs}=n/" "$CONFIGFILE"
-          done
-          
-          # 禁用更多非必要组件
-          modules=(UVC HID SERIAL AUDIO XFRM IMQ NFSD NFSC CIFS NTFS_3G LPRD 
-            U2EC HDPARM PARTED SMBD WINS SMBD_SYSLOG FTPD RPL2TP EAP_PEAP SFTP 
-            OPENSSH OPENVPN SSWAN OPENSSL_EC XUPNPD FIREFLY FFMPEG_NEW 
-            TRANSMISSION TRANSMISSION_WEB_CONTROL ARIA ARIA_WEB_CONTROL 
-            SCUTCLIENT GDUT_DRCOM DOGCOM MINIEAP NJIT_CLIENT SOFTETHERVPN_SERVER 
-            SOFTETHERVPN_CLIENT SOFTETHERVPN_CMD VLMCSD LRZSZ DUMP1090 RTL_SDR 
-            SOCAT SRELAY MENTOHUST FRPC FRPS REDSOCKS SINGBOX NAIVEPROXY ADBYBY 
-            DNSFORWARDER ADGUARDHOME ZEROTIER DDNSTO ALDRIVER SQM)
-          for m in "${modules[@]}"; do
-            sed -i "s/CONFIG_FIRMWARE_INCLUDE_${m}=y/CONFIG_FIRMWARE_INCLUDE_${m}=n/" "$CONFIGFILE"
-          done
+          cd $WORK_DIR
+          # 编译用户态组件和固件打包
+          make V=1 2>&1 | tee full_build.log
 
-      - name: Build firmware
+      - name: Package firmware
         run: |
-          # 开始编译并输出详细日志
-          make ${{ inputs.target }} TOOLCHAIN=${{ inputs.toolchain }} V=1  # V=1显示详细编译过程
-          
-          # 准备输出目录和文件名
-          mkdir -p trunk/output
-          base="${FIRMWARE_AUTHOR}-${{ inputs.target }}-4.4-${{ inputs.toolchain }}"
-          [ "${{ inputs.nanoversion }}" = "true" ] && base="${base}-nano"
-          [ "${{ inputs.cpufreq }}" = "true" ] && base="${base}-cpufreq-${{ inputs.mt7621_oc }}"
-          base="${base}-${BUILD_DATE}"
-          
-          # 移动生成的固件文件
-          i=1
-          for f in trunk/images/*.trx; do
-            suffix=""
-            [ $i -gt 1 ] && suffix="-$i"
-            mv "$f" "trunk/output/${base}${suffix}.trx"
-            i=$((i+1))
-          done
+          cd $WORK_DIR
+          mkdir -p output
+          base="RM2100-4.4-${{ inputs.toolchain }}-${{ env.BUILD_DATE }}"
+          [ "${{ inputs.cpufreq }}" = "true" ] && base="${base}-oc-${{ inputs.mt7621_oc }}"
+          mv images/*.trx output/${base}.trx
+          ls -la output/
 
-      - name: Upload firmware as artifact
-        uses: actions/upload-artifact@main
+      - name: Upload kernel logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.target }}-firmware-${{ env.BUILD_DATE }}
-          path: trunk/output/*.trx
-          if-no-files-found: error
+          name: kernel-logs
+          path: ${{ env.WORK_DIR }}/kernel_build.log
 
-      - name: Create GitHub release
-        if: ${{ inputs.release }}
-        uses: softprops/action-gh-release@master
+      - name: Upload full logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-build-logs
+          path: ${{ env.WORK_DIR }}/full_build.log
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: rm2100-firmware-${{ env.BUILD_DATE }}
+          path: ${{ env.WORK_DIR }}/output/*.trx
+
+      - name: Create release
+        if: ${{ inputs.release && success() }}
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.BUILD_DATE }}
-          name: Firmware Build ${{ env.BUILD_DATE }}
-          body: |
-            ### Build Details
-            - Device: ${{ inputs.target }}
-            - Toolchain: ${{ inputs.toolchain }}
-            - Kernel: ${{ env.LINUX_DIR }}
-            - CPU Overclock: ${{ inputs.cpufreq }} (${{ inputs.mt7621_oc }})
-            - Nano Version: ${{ inputs.nanoversion }}
-            - Build Date: ${{ env.BUILD_DATE }}
-          files: trunk/output/*.trx
-
-      - name: Clean up old releases
-        if: ${{ inputs.oldreleases }}
-        uses: dev-drprasad/delete-older-releases@master
-        with:
-          keep_latest: 1
-          keep_minimum_runs: 1
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Clean up old workflows
-        if: ${{ inputs.oldworkflow }}
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          retain_days: 0
-          keep_minimum_runs: 1
+          files: ${{ env.WORK_DIR }}/output/*.trx
