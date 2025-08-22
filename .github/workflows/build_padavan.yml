@@ -30,9 +30,7 @@ on:
 env:
   FIRMWARE_AUTHOR: CustomBuild
   LINUX_DIR: linux-4.4.x
-  WORK_DIR: padavan  # 专用目录，避免冲突
-  # 修复配置文件路径的环境变量引用方式
-  CONFIGFILE: ${{ env.WORK_DIR }}/trunk/configs/templates/RM2100.config
+  WORK_DIR: padavan  # 专用工作目录
 
 jobs:
   build:
@@ -48,7 +46,7 @@ jobs:
           path: current
           fetch-depth: 1
 
-      - name: Clone Padavan source (解决目录冲突)
+      - name: Clone Padavan source
         run: |
           # 清理并克隆源码到专用目录
           if [ -d "${{ env.WORK_DIR }}" ]; then
@@ -89,6 +87,8 @@ jobs:
       - name: Export configuration
         run: |
           echo "BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> $GITHUB_ENV
+          # 定义配置文件路径（在步骤中计算，避免环境变量嵌套）
+          echo "CONFIGFILE=${{ env.WORK_DIR }}/trunk/configs/templates/RM2100.config" >> $GITHUB_ENV
           # 导入默认自定义配置
           echo 'LANIP=192.168.2.1' >> $GITHUB_ENV
           echo 'SIGNACCOUNT=root' >> $GITHUB_ENV
